@@ -35,7 +35,7 @@ Look near the last couple of lines for something that looks like:
 ```
 usb 3-3.1: FTDI USB Serial Device converter now attached to ttyUSB0
 ```
-6. This tells you that the port is /dev/ttyUSB0
+This tells you that the port is /dev/ttyUSB0
 
 ### Determining Serial port on Windows
 1. Plug the Tappy in 
@@ -49,7 +49,7 @@ This is the Tappy's COM port.
 
 ## Connecting to the Tappy
 Once we know the Tappy's serial port, we will need two libraries to actually
-connect to it. So run the following commands in your project folder:
+connect to it. Run the following commands in your project folder:
 ```
 npm install @taptrack/tappy --save
 npm install @taptrack/tappy-nodeserialcommunicator --save
@@ -97,7 +97,7 @@ var comm = new SerialCommunicator({path: "/dev/ttyUSB0"})
 The path parameter should be set to whatever the serial port your found 
 earlier was. This communicator creates and wraps a Node Serial Port instance
 in order to provide the Tappy with a consistent API regardless of the 
-communication method in use.
+communication method in use. 
 
 Now that we have a communicator for our Tappy object to use, lets construct
 it and connect.
@@ -232,16 +232,21 @@ program
         var msg = new BasicNfcFamily.Commands.StreamTags(
             timeout,BasicNfcFamily.PollingModes.GENERAL);
         
+        var closeAndQuit = function(message) {
+            console.error(message);
+            tappy.disconnect(function() {
+                process.exit(1);
+            });
+        };
+        
         tappy.setErrorListener(function (errorType,data) {
-            var isFatal = false;
             switch(errorType) {
             case Tappy.ErrorType.NOT_CONNECTED:
                 console.error("Tappy not connected");
-                isFatal = true;
+                process.exit(1);
                 break;
             case Tappy.ErrorType.CONNECTION_ERROR:
-                console.error("Connection error");
-                isFatal = true;
+                closeAndQuit("Connection error");
                 break;
             case Tappy.ErrorType.INVALID_HDLC:
                 console.error("Received invalid frame");
@@ -250,15 +255,8 @@ program
                 console.error("Received invalid packet");
                 break;
             default:
-                console.error("Unknown error occured");
-                isFatal = true;
+                closeAndQuit("Unknown error occurred");
                 break;
-            }
-
-            if(isFatal) {
-                tappy.disconnect(function() {
-                    process.exit(0);
-                });
             }
         });
         
@@ -289,16 +287,21 @@ program
         var msg = new BasicNfcFamily.Commands.StreamTags(
             timeout,BasicNfcFamily.PollingModes.GENERAL);
         
+        var closeAndQuit = function(message) {
+            console.error(message);
+            tappy.disconnect(function() {
+                process.exit(1);
+            });
+        };
+        
         tappy.setErrorListener(function (errorType,data) {
-            var isFatal = false;
             switch(errorType) {
             case Tappy.ErrorType.NOT_CONNECTED:
                 console.error("Tappy not connected");
-                isFatal = true;
+                process.exit(1);
                 break;
             case Tappy.ErrorType.CONNECTION_ERROR:
-                console.error("Connection error");
-                isFatal = true;
+                closeAndQuit("Connection error");
                 break;
             case Tappy.ErrorType.INVALID_HDLC:
                 console.error("Received invalid frame");
@@ -307,18 +310,11 @@ program
                 console.error("Received invalid packet");
                 break;
             default:
-                console.error("Unknown error occured");
-                isFatal = true;
+                closeAndQuit("Unknown error occurred");
                 break;
             }
-
-            if(isFatal) {
-                tappy.disconnect(function() {
-                    process.exit(0);
-                });
-            }
         });
-
+        
         tappy.setMessageListener(function(msg) {
             var nfcResolver = new BasicNfcFamily.Resolver();
             var systemResolver = new SystemFamily.Resolver();
@@ -346,14 +342,14 @@ program
                     }
                 } else if (BasicNfcFamily.Responses.ScanTimeout.isTypeOf(resolved)) {
                     console.log("Timeout reached");
-                    process.exit(1)
+                    tappy.disconnect(function() {
+                        process.exit(0);
+                    });
                 } else {
-                    console.error("Unexpected response");
-                    process.exit(1);
+                    closeAndQuit("Unexpected response");
                 }
             } else {
-                console.error("Unexpected response");
-                process.exit(1);
+                closeAndQuit("Unexpected response");
             }
         });
         
@@ -369,14 +365,16 @@ So, what is all that resolver and `isTypeOf` stuff? The messages passed by the
 Tappy to the message listener are raw messages in the Tappy's messaging protocol.
 In order to make sense of the payload, you have to use a resolver to convert these
 raw messages into a parsed response. Similarly, the getTagType() method on the
-TagFound response a special tag type identification code that you should resolve
-into a tag property object.
+TagFound response returns a special tag type identification code that you can 
+resolve into a tag property object that contains information about the tag and
+its capabilities.
 
 
 ## Conclusion
 Now we have a command line utility that will tell the Tappy
 to scan for tags and report them to the command line. All in under 100 lines of
-code including plenty of error handling. Try it out, you should see something like this:
+code including error handling. If you have some NFC tags on hand, try it out, 
+you should see something like this:
 
 ```shell
 lvanoort@Osiris ~/Projects/tappyUtility $ node index.js stream-tags --timeout 5 /dev/ttyUSB0

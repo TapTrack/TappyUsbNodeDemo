@@ -19,17 +19,22 @@ program
         
         var msg = new BasicNfcFamily.Commands.StreamTags(
             timeout,BasicNfcFamily.PollingModes.GENERAL);
+
+        var closeAndQuit = function(message) {
+            console.error(message);
+            tappy.disconnect(function() {
+                process.exit(1);
+            });
+        };
         
         tappy.setErrorListener(function (errorType,data) {
-            var isFatal = false;
             switch(errorType) {
             case Tappy.ErrorType.NOT_CONNECTED:
                 console.error("Tappy not connected");
-                isFatal = true;
+                process.exit(1);
                 break;
             case Tappy.ErrorType.CONNECTION_ERROR:
-                console.error("Connection error");
-                isFatal = true;
+                closeAndQuit("Connection error");
                 break;
             case Tappy.ErrorType.INVALID_HDLC:
                 console.error("Received invalid frame");
@@ -38,15 +43,8 @@ program
                 console.error("Received invalid packet");
                 break;
             default:
-                console.error("Unknown error occured");
-                isFatal = true;
+                closeAndQuit("Unknown error occurred");
                 break;
-            }
-
-            if(isFatal) {
-                tappy.disconnect(function() {
-                    process.exit(0);
-                });
             }
         });
 
@@ -77,14 +75,14 @@ program
                     }
                 } else if (BasicNfcFamily.Responses.ScanTimeout.isTypeOf(resolved)) {
                     console.log("Timeout reached");
-                    process.exit(1);
+                    tappy.disconnect(function() {
+                        process.exit(0);
+                    });
                 } else {
-                    console.error("Unexpected response");
-                    process.exit(1);
+                    closeAndQuit("Unexpected response");
                 }
             } else {
-                console.error("Unexpected response");
-                process.exit(1);
+                closeAndQuit("Unexpected response");
             }
         });
         
