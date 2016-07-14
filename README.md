@@ -78,7 +78,7 @@ At this point, your project's `package.json` should look something like this:
 ```
 If you haven't already, create the project's source file (index.js by default) 
 and open it in your preferred text editor. We start by importing the Tappy
-and NodeSerialCommunicator packages via `require()`
+and NodeSerialCommunicator packages via `require()`:
 
 ```javascript
 var Tappy = require("@taptrack/tappy");
@@ -95,7 +95,7 @@ it will use thereafter to communicate with the Tappy, so lets start there.
 var comm = new SerialCommunicator({path: "/dev/ttyUSB0"})
 var tappy = new Tappy({communicator: comm});
 ```
-The path parameter should be set to whatever the serial port your found 
+The path parameter should be set to whatever the serial port you found 
 earlier was. This communicator creates and wraps a Node Serial Port instance
 in order to provide the Tappy with a consistent API regardless of the 
 communication method in use. 
@@ -182,6 +182,7 @@ var messageListener = function(msg) {
 
     if(resolved === null) {
         console.error("Unexpected response");
+        return;
     }
 
     if(resp.TagFound.isTypeOf(resolved)) {
@@ -228,7 +229,7 @@ var streamTags = function(path,timeout) {
 
 streamTags("/dev/ttyUSB0",5);
 ```
-Now if we attarun the application and hold a tag up to the reader, you should see something
+Now if we run the application and hold a tag up to the reader, we should see something
 like this:
 ```shell
 lvanoort@Osiris ~/Projects/tappyUtility $ node index.js
@@ -246,13 +247,13 @@ Timeout reached
 
 ## Disconnecting and Handling Errors
 There are two different types of errors that your application may encounter. The
-first are errors reported by the Tappy itself as messages that are reported through.
+first are errors reported by the Tappy via response messages, which are handled by
 the standard message listener. Although there are 
 some standard errors in the System command family to cover things like the Tappy
 receiving garbled or corrupted messages, most of these errors
 are specific to the command you are using - for instance attempting to write
 a message that exceeds a tag's capacity will cause the Tappy to send back an
-error frame specific to that operation. For brevity's sake, in this application,
+error frame specific to that operation. For simplicity's sake, in this application,
 we'll just treat all unexpected messages as fatal errors.
 
 The second type of errors are errors that the driver library itself experiences such
@@ -304,8 +305,8 @@ var getErrorListener = function(tappy) {
 ```
 Note that we must pass this function our Tappy instance in order to create the actual
 error listener callback. This is to allow the listener to disconnect the Tappy when
-fatal error occurs. We will have to create a similar getMessageListener function around
-our message listener to add the exiting capability:
+fatal errors occur. We will have to create a similar getMessageListener function around
+our message listener to add the exit capability:
 ```javascript
 var getMessageListener = function(tappy) {
     return function(msg) {
