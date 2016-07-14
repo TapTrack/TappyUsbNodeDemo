@@ -93,24 +93,29 @@ it will use thereafter to communicate with the Tappy, so lets start there.
 
 ```javascript
 var comm = new SerialCommunicator({path: "/dev/ttyUSB0"})
+var tappy = new Tappy({communicator: comm});
 ```
 The path parameter should be set to whatever the serial port your found 
 earlier was. This communicator creates and wraps a Node Serial Port instance
 in order to provide the Tappy with a consistent API regardless of the 
 communication method in use. 
 
-Now that we have a communicator for our Tappy object to use, lets construct
-it and connect.
+Now that we have a Tappy object to use, lets make a function that connects to
+the Tappy.
 ```javascript
-var comm = new SerialCommunicator({path: "/dev/ttyUSB0"})
-var tappy = new Tappy({communicator: comm});
-tappy.connect(function() {
-    console.log("Tappy connected!");
-    tappy.disconnect(function() {
-        console.log("Tappy disconnected!");
-        process.exit(0);
+var connectTappy = function(path) {
+    var comm = new SerialCommunicator({path: path})
+    var tappy = new Tappy({communicator: comm});
+    tappy.connect(function() {
+        console.log("Tappy connected!");
+        tappy.disconnect(function() {
+            console.log("Tappy disconnected!");
+            process.exit(0);
+        });
     });
-});
+}
+
+connectTappy("/dev/ttyUSB0");
 ```
 Now you should be able to run this script and see the Tappy connect:
 ```shell
@@ -119,265 +124,114 @@ Tappy connected!
 Tappy disconnected!
 ```
 
-## Parameterizing
-Hardcoding the serial port path works fine if we're writing a one-off script, but
-if we want to make a useful utility, we need to be able to specify the port at runtime.
-In order to make this easier, let's install an excellent Node library for writing
-command line utilities.
-```
-npm install commander --save
-```
-
-Working with commander is out of the scope of this tutorial, so just copy the following
-code to define our first command "stream-tags".
-```javascript
-var program = require('commander');
-
-var Tappy = require("@taptrack/tappy");
-var SerialCommunicator = require("@taptrack/tappy-nodeserialcommunicator");
-
-program
-    .command('stream-tags <path>')
-    .alias('stream')
-    .description("Stream tags")
-    .option('-t, --timeout <timeout>','Time to stream for, 0 is indefinite',parseInt,0)
-    .action(function(path, options) {
-        var timeout = options.timeout;
-
-        var comm = new SerialCommunicator({path: path})
-        var tappy = new Tappy({communicator: comm});
-        
-        tappy.connect(function() {
-            console.log("Tappy connected!");
-            tappy.disconnect(function() {
-                console.log("Tappy disconnected!");
-                process.exit(0);
-            });
-        });
-    });
-
-program.parse(process.argv);
-```
-
-Now we should be able to specify the Tappy's port at runtime
-```shell
-lvanoort@Osiris ~/Projects/tappyUtility $ node index.js stream-tags /dev/ttyUSB0
-Tappy connected!
-Tappy disconnected!
-```
-You may notice that there is also a timeout option. This is going to be used
-for the stream tags command when we implement it.
-
 ## Sending a command
-Now we're ready to send a command. In order to do that we're going to bring in two
-additional libraries and add them to our imports.
+The Tappy splits up the commands and responses it supports into several different
+'command families' grouped by common functionality. For this application we only 
+need the Basic NFC command family, which includes tag detection and basic read/write
+commands, so let's get it.
 ```shell
 npm install @taptrack/tappy-basicnfcfamily --save
-npm install @taptrack/tappy-systemfamily --save
 ```
 
 ```javascript
-var SystemFamily = require("@taptrack/tappy-systemfamily");
 var BasicNfcFamily = require("@taptrack/tappy-basicnfcfamily");
 ```
-The Tappy splits up the commands and responses it supports into several different
-'command families' categorized by common functionality. The System family contains
-several Tappy control commands as well as system responses and error messages, while
-the Basic NFC family has several commands and reponses used for basic tag detection
-and writing. 
 
+Now we're ready to tell the Tappy to stream tags. This command will cause the Tappy
+to report every tag it encounters until either it is interrupted or an optional
+timeout is reached. Additionally, the Tappy must be told what polling mode it should
+use, usually PollingModes.GENERAL is the correct choice, but PollingModes.TYPE_1
+should be chosen if you are working with Topaz tags.
 ```javascript
-program
-    .command('stream-tags <path>')
-    .alias('stream')
-    .description("Stream tags")
-    .option('-t, --timeout <timeout>','Time to stream for, 0 is indefinite',parseInt,0)
-    .action(function(path, options) {
-        var timeout = options.timeout;
+var streamTags = function(path,timeout) {
+    var comm = new SerialCommunicator({path: path});
+    var tappy = new Tappy({communicator: comm});
 
-        var comm = new SerialCommunicator({path: path})
-        var tappy = new Tappy({communicator: comm});
-        
-        var msg = new BasicNfcFamily.Commands.StreamTags(
-            timeout,BasicNfcFamily.PollingModes.GENERAL);
-        
-        tappy.connect(function() {
-            console.log("Tappy connected!");
-            tappy.sendMessage(msg);
-        });
+    var msg = new BasicNfcFamily.Commands.StreamTags(
+        timeout,BasicNfcFamily.PollingModes.GENERAL);
+    
+    tappy.connect(function() {
+        console.log("Tappy connected!");
+        tappy.sendMessage(msg);
     });
+};
 
-program.parse(process.argv);
+streamTags("/dev/ttyUSB0",5);
 ```
-If you run the application now, you should see the Tappy's lights start blinking
-as it starts scanning for tags. Congratulations, now you're scanning for tags!
+If you run the application now, you should see the Tappy's lights blink for 
+approximately five seconds as it scans for tags before it times out. 
+Now let's listen to the Tappy's responses so we can see what it finds.
 
 ## Listening for responses
-Great, now we've connected to the Tappy and sent a command, so lets start listening
-for responses. The Tappy has two listeners - an error listener and a message listener.
-Let's start by setting up a basic error listener that disconnects and quits the 
-application occurs.
+The format of the message listener is quite simple, only taking a single parameter -
+the message that was received. However, because the driver is generic and makes no
+assumptions about the command families in use, the application must parse this raw
+message's payload in order to make sense of it. Conveniently, every command 
+family library also provides a resolver that performs this procedure for every 
+command and response in that family. Let's make use of the resolver from the Basic
+NFC family to listen for TagFound and Timeout messages.
 ```javascript
-program
-    .command('stream-tags <path>')
-    .alias('stream')
-    .description("Stream tags")
-    .option('-t, --timeout <timeout>','Time to stream for, 0 is indefinite',parseInt,0)
-    .action(function(path, options) {
-        var timeout = options.timeout;
+var messageListener = function(msg) {
+    var resolver = new BasicNfcFamily.Resolver();
+    var resp = BasicNfcFamily.Responses;
+    var resolved = null;
+    
+    if(resolver.checkFamily(msg)) {
+        resolved = resolver.resolveResponse(msg);
+    }
 
-        var comm = new SerialCommunicator({path: path});
-        var tappy = new Tappy({communicator: comm});
-        
-        var msg = new BasicNfcFamily.Commands.StreamTags(
-            timeout,BasicNfcFamily.PollingModes.GENERAL);
-        
-        var closeAndQuit = function(message) {
-            console.error(message);
-            tappy.disconnect(function() {
-                process.exit(1);
-            });
-        };
-        
-        tappy.setErrorListener(function (errorType,data) {
-            switch(errorType) {
-            case Tappy.ErrorType.NOT_CONNECTED:
-                console.error("Tappy not connected");
-                process.exit(1);
-                break;
-            case Tappy.ErrorType.CONNECTION_ERROR:
-                closeAndQuit("Connection error");
-                break;
-            case Tappy.ErrorType.INVALID_HDLC:
-                console.error("Received invalid frame");
-                break;
-            case Tappy.ErrorType.INVALID_TCMP:
-                console.error("Received invalid packet");
-                break;
-            default:
-                closeAndQuit("Unknown error occurred");
-                break;
-            }
-        });
-        
-        
-        tappy.connect(function() {
-            console.log("Tappy connected!");
-            tappy.sendMessage(msg);
-        });
-    });
+    if(resolved === null) {
+        console.error("Unexpected response");
+    }
 
-program.parse(process.argv);
+    if(resp.TagFound.isTypeOf(resolved)) {
+        var tagTypeId = resolved.getTagType(); 
+        var tagProps = 
+            Tappy.resolveTagType(tagTypeId);
+        var tagCodeBuf = 
+            new Buffer(resolved.getTagCode());
+        var tagCodeStr = tagCodeBuf
+            .toString("hex").toUpperCase();
+
+        if(tagProps !== null) {
+            console.log(
+                "UID: %s, Tag Description: %s",
+                tagCodeStr,
+                tagProps.description);
+        } else {
+            console.log("UID: %s",
+                    tagCodeStr);
+        }
+    } else if (resp.ScanTimeout.isTypeOf(resolved)) {
+        console.log("Timeout reached");
+    } else {
+        console.error("Unexpected response");
+    }
+};
 ```
-
-Great, now we're almost done. Now we just have to listen for valid responses.
-Let's start with the code:
+To attach this listener to the Tappy, we merely need to add one line to our stream tags
+function
 ```javascript
-program
-    .command('stream-tags <path>')
-    .alias('stream')
-    .description("Stream tags")
-    .option('-t, --timeout <timeout>','Time to stream for, 0 is indefinite',parseInt,0)
-    .action(function(path, options) {
-        var timeout = options.timeout;
+var streamTags = function(path,timeout) {
+    var comm = new SerialCommunicator({path: path});
+    var tappy = new Tappy({communicator: comm});
+    tappy.setMessageListener(messageListener);
 
-        var comm = new SerialCommunicator({path: path});
-        var tappy = new Tappy({communicator: comm});
-        
-        var msg = new BasicNfcFamily.Commands.StreamTags(
-            timeout,BasicNfcFamily.PollingModes.GENERAL);
-        
-        var closeAndQuit = function(message) {
-            console.error(message);
-            tappy.disconnect(function() {
-                process.exit(1);
-            });
-        };
-        
-        tappy.setErrorListener(function (errorType,data) {
-            switch(errorType) {
-            case Tappy.ErrorType.NOT_CONNECTED:
-                console.error("Tappy not connected");
-                process.exit(1);
-                break;
-            case Tappy.ErrorType.CONNECTION_ERROR:
-                closeAndQuit("Connection error");
-                break;
-            case Tappy.ErrorType.INVALID_HDLC:
-                console.error("Received invalid frame");
-                break;
-            case Tappy.ErrorType.INVALID_TCMP:
-                console.error("Received invalid packet");
-                break;
-            default:
-                closeAndQuit("Unknown error occurred");
-                break;
-            }
-        });
-        
-        tappy.setMessageListener(function(msg) {
-            var nfcResolver = new BasicNfcFamily.Resolver();
-            var systemResolver = new SystemFamily.Resolver();
-            var resolved = null;
-            
-            if(nfcResolver.checkFamily(msg)) {
-                resolved = nfcResolver.resolveResponse(msg);
-            } else if (systemResolver.checkFamily(msg)) {
-                resolved = systemResolver.resolveResponse(msg);
-            }
-
-            if(resolved !== null) {
-                if(BasicNfcFamily.Responses.TagFound.isTypeOf(resolved)) {
-                    var tagTypeId = resolved.getTagType(); 
-                    var tagProps = Tappy.resolveTagType(tagTypeId);
-                    var tagCode = new Buffer(resolved.getTagCode());
-
-                    if(tagProps !== null) {
-                        console.log(
-                            "UID: %s, Tag Description: %s",
-                            tagCode.toString("hex").toUpperCase(), 
-                            tagProps.description);
-                    } else {
-                        console.log("UID: %s",tagCode.toString("hex").toUpperCase());
-                    }
-                } else if (BasicNfcFamily.Responses.ScanTimeout.isTypeOf(resolved)) {
-                    console.log("Timeout reached");
-                    tappy.disconnect(function() {
-                        process.exit(0);
-                    });
-                } else {
-                    closeAndQuit("Unexpected response");
-                }
-            } else {
-                closeAndQuit("Unexpected response");
-            }
-        });
-        
-        tappy.connect(function() {
-            console.log("Tappy connected!");
-            tappy.sendMessage(msg);
-        });
+    var msg = new BasicNfcFamily.Commands.StreamTags(
+        timeout,BasicNfcFamily.PollingModes.GENERAL);
+    
+    tappy.connect(function() {
+        console.log("Tappy connected!");
+        tappy.sendMessage(msg);
     });
+};
 
-program.parse(process.argv);
+streamTags("/dev/ttyUSB0",5);
 ```
-So, what is all that resolver and `isTypeOf` stuff? The messages passed by the
-Tappy to the message listener are raw messages in the Tappy's messaging protocol.
-In order to make sense of the payload, you have to use a resolver to convert these
-raw messages into a parsed response. Similarly, the getTagType() method on the
-TagFound response returns a special tag type identification code that you can 
-resolve into a tag property object that contains information about the tag and
-its capabilities.
-
-
-## Conclusion
-Now we have a command line utility that will tell the Tappy
-to scan for tags and report them to the command line. All in under 100 lines of
-code including error handling. If you have some NFC tags on hand, try it out, 
-you should see something like this:
-
+Now if we attarun the application and hold a tag up to the reader, you should see something
+like this:
 ```shell
-lvanoort@Osiris ~/Projects/tappyUtility $ node index.js stream-tags --timeout 5 /dev/ttyUSB0
+lvanoort@Osiris ~/Projects/tappyUtility $ node index.js
 Tappy connected!
 UID: 04DA32CA9D3C80, Tag Description: Generic NFC Forum Type 2
 UID: 04DA32CA9D3C80, Tag Description: Generic NFC Forum Type 2
@@ -390,4 +244,179 @@ Timeout reached
 
 ```
 
+## Disconnecting and Handling Errors
+There are two different types of errors that your application may encounter. The
+first are errors reported by the Tappy itself as messages that are reported through.
+the standard message listener. Although there are 
+some standard errors in the System command family to cover things like the Tappy
+receiving garbled or corrupted messages, most of these errors
+are specific to the command you are using - for instance attempting to write
+a message that exceeds a tag's capacity will cause the Tappy to send back an
+error frame specific to that operation. For brevity's sake, in this application,
+we'll just treat all unexpected messages as fatal errors.
+
+The second type of errors are errors that the driver library itself experiences such
+as serial port errors or receiving garbled messages from the Tappy. These messages are
+reported instead through a special purpose error listener. We will treat some of these
+messages as fatal errors (NOT_CONNECTED or CONNECTION_ERROR), but others we can safely
+just report and ignore (INVALID_TCMP and INVALID_HDLC) as they usually result from
+transient conditions such as some random bytes being stuck in a transmission buffer.
+
+In the case of the fatal errors, we want to close the connection and exit the program, so
+the first new function we create will do just that:
+```javascript
+var exit = function(tappy,code) {
+    if(tappy.isConnected()) {
+        tappy.disconnect(function() {
+            process.exit(code);
+        });
+    } else {
+        process.exit(code);
+    }
+};
+```
+Now let's create our error listener:
+```javascript
+var getErrorListener = function(tappy) {
+    return function (errorType,data) {
+        switch(errorType) {
+        case Tappy.ErrorType.NOT_CONNECTED:
+            console.error("Tappy not connected");
+            exit(tappy,1);
+            break;
+        case Tappy.ErrorType.CONNECTION_ERROR:
+            console.error("Connection error");
+            exit(tappy,1);
+            break;
+        case Tappy.ErrorType.INVALID_HDLC:
+            console.error("Received invalid frame");
+            break;
+        case Tappy.ErrorType.INVALID_TCMP:
+            console.error("Received invalid packet");
+            break;
+        default:
+            console.error("Unknown error occurred");
+            exit(tappy,1);
+            break;
+        }
+    };
+};
+```
+Note that we must pass this function our Tappy instance in order to create the actual
+error listener callback. This is to allow the listener to disconnect the Tappy when
+fatal error occurs. We will have to create a similar getMessageListener function around
+our message listener to add the exiting capability:
+```javascript
+var getMessageListener = function(tappy) {
+    return function(msg) {
+        var resolver = new BasicNfcFamily.Resolver();
+        var resp = BasicNfcFamily.Responses;
+        var resolved = null;
+        
+        if(resolver.checkFamily(msg)) {
+            resolved = resolver.resolveResponse(msg);
+        }
+
+        if(resolved === null) {
+            console.error("Unexpected response");
+            exit(tappy,1);
+        }
+
+        if(resp.TagFound.isTypeOf(resolved)) {
+            var tagTypeId = resolved.getTagType(); 
+            var tagProps = 
+                Tappy.resolveTagType(tagTypeId);
+            var tagCodeBuf = 
+                new Buffer(resolved.getTagCode());
+            var tagCodeStr = tagCodeBuf
+                .toString("hex").toUpperCase();
+
+            if(tagProps !== null) {
+                console.log(
+                    "UID: %s, Tag Description: %s",
+                    tagCodeStr,
+                    tagProps.description);
+            } else {
+                console.log("UID: %s",
+                        tagCodeStr);
+            }
+        } else if (resp.ScanTimeout.isTypeOf(resolved)) {
+            console.log("Timeout reached");
+            exit(tappy,0);
+        } else {
+            console.error("Unexpected response");
+            exit(tappy,1);
+        }
+    };
+};
+
+```
+
+Plugging these listeners into the Tappy driver, we get:
+```javascript
+var streamTags = function(path,timeout) {
+    var comm = new SerialCommunicator({path: path});
+    var tappy = new Tappy({communicator: comm});
+
+    tappy.setErrorListener(getErrorListener(tappy));
+    tappy.setMessageListener(getMessageListener(tappy));
+
+    var msg = new BasicNfcFamily.Commands.StreamTags(
+        timeout,BasicNfcFamily.PollingModes.GENERAL);
+    
+    tappy.connect(function() {
+        console.log("Tappy connected!");
+        tappy.sendMessage(msg);
+    });
+};
+
+streamTags("/dev/ttyUSB0",5);
+```
+Now if we run the program, we should get the same output we got earlier, but it will
+cleanly exit on a fatal error and when it receives a timeout.
+
+## Parameterizing
+Our simple utility is almost done! It can already connect to a Tappy and command it to
+scan for tags, but it's a little clunky if we want to change the path or timeout. 
+Let's just add a little gold plating to make it a bit more usable and
+allow us to specify the timeout and serial port path at runtime. In order to do this,
+lets install an excellent library for writing command-line node utilities:
+```
+npm install commander --save
+```
+and import it at the top of our program:
+```javascript
+var program = require('commander');
+```
+
+Working with commander is out of the scope of this tutorial, so just replace the call
+to stream tags with the following:
+```javascript
+program
+    .command('stream-tags <path>')
+    .alias('stream')
+    .description("Stream tags")
+    .option('-t, --timeout <timeout>','Time to stream for, 0 is indefinite',parseInt,0)
+    .action(function(path,options) {
+        streamTags(path,options.timeout);   
+    });
+
+program.parse(process.argv);
+```
+
+Now we should be able to specify the Tappy's port and the timeout at runtime:
+```shell
+lvanoort@Osiris ~/Projects/tappyUtility $ node index.js stream-tags --timeout 5 /dev/ttyUSB0
+Tappy connected!
+UID: 04DA32CA9D3C80, Tag Description: Generic NFC Forum Type 2
+UID: 04DA32CA9D3C80, Tag Description: Generic NFC Forum Type 2
+UID: 04115FCAF13880, Tag Description: MIFARE DESFire - Unspecified model/capacity
+UID: 04115FCAF13880, Tag Description: MIFARE DESFire - Unspecified model/capacity
+UID: 04115FCAF13880, Tag Description: MIFARE DESFire - Unspecified model/capacity
+UID: 04115FCAF13880, Tag Description: MIFARE DESFire - Unspecified model/capacity
+UID: 04115FCAF13880, Tag Description: MIFARE DESFire - Unspecified model/capacity
+Timeout reached
+```
+
+With that our little Node utility for detecting NFC tags with the TappyUSB is complete!
 
