@@ -8,9 +8,7 @@ utility that scans for tags.
 
 ## Platform Support
 For TappyUSB devices, the SDK will work on any platform supported by Node SerialPort
-3.1. Currently TapTrack has not tested any Bluetooth libraries to enable usage of
-TappyBLE devices with Node, but any library that is API-compatible with SerialPort
-should work.
+3.1.
 
 ## Getting Started
 First, you must install the appropriate version of NodeJS for your computer.
